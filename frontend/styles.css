@@ -1,0 +1,123 @@
+:root {
+  color-scheme: light;
+  --background: #f5f7fa;
+  --panel: #ffffff;
+  --text: #17202a;
+  --muted: #596678;
+  --border: #cbd5e1;
+  --accent: #006d77;
+  --accent-dark: #07545d;
+  --success-bg: #e8f6ef;
+  --success-border: #2e7d56;
+  --error-bg: #fff1f0;
+  --error-border: #b42318;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--background);
+  color: var(--text);
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 20px;
+  line-height: 1.5;
+}
+
+.page-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.status-panel {
+  width: min(100%, 720px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 36px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--accent-dark);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+h1 {
+  margin: 0;
+  font-size: 44px;
+  line-height: 1.1;
+}
+
+.intro {
+  margin: 18px 0 28px;
+  color: var(--muted);
+}
+
+.status-box {
+  min-height: 112px;
+  overflow-wrap: anywhere;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 18px;
+  white-space: pre-wrap;
+}
+
+.status-box--loading {
+  background: #f8fafc;
+}
+
+.status-box--success {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+}
+
+.status-box--error {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+
+.primary-button {
+  min-height: 56px;
+  margin-top: 24px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 20px;
+  font-weight: 700;
+  padding: 12px 22px;
+}
+
+.primary-button:focus,
+.primary-button:hover {
+  background: var(--accent-dark);
+}
+
+@media (max-width: 520px) {
+  body {
+    font-size: 18px;
+  }
+
+  .page-shell {
+    align-items: start;
+    padding: 16px;
+  }
+
+  .status-panel {
+    padding: 24px;
+  }
+
+  h1 {
+    font-size: 36px;
+  }
+}
