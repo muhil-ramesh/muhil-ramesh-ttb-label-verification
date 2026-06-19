@@ -5,11 +5,14 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend.app.api import router as api_router
+
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = ROOT_DIR / "frontend"
 
 app = FastAPI(title="TTB Label Verification", version="0.1.0")
+app.include_router(api_router)
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 

@@ -54,3 +54,5 @@ class VerificationResult(BaseModel):
 
     verdict: VerificationVerdict
     fields: list[FieldResult]
+    extracted_label: ExtractedLabel | None = None
+    latency_ms: int | None = None
