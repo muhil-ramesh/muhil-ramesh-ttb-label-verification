@@ -21,12 +21,16 @@ def test_root_serves_frontend() -> None:
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "TTB Label Verification" in response.text
+    assert "TTB Label Check" in response.text
+    assert "Choose label image" in response.text
+    assert "Government Warning" in response.text
     assert "/static/app.js" in response.text
 
 
-def test_frontend_script_calls_health() -> None:
+def test_frontend_script_calls_verify_endpoint() -> None:
     response = client.get("/static/app.js")
 
     assert response.status_code == 200
-    assert 'fetch("/health"' in response.text
+    assert 'fetch("/verify"' in response.text
+    assert 'formData.append("application_data"' in response.text
+    assert "NEEDS REVIEW" in response.text

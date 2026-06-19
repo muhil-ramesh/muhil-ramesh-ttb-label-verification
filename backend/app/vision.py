@@ -18,7 +18,8 @@ from backend.app.models import ExtractedLabel
 
 
 DEFAULT_VISION_MODEL = "gemini-3.5-flash"
-DEFAULT_GEMINI_TIMEOUT_SECONDS = 4.0
+DEFAULT_GEMINI_TIMEOUT_SECONDS = 15.0
+GEMINI_TIMEOUT_ENV = "GEMINI_TIMEOUT_SECONDS"
 GEMINI_API_ENDPOINT = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
@@ -206,12 +207,16 @@ class GeminiVisionService:
         *,
         api_key: str | None = None,
         model: str | None = None,
-        timeout_seconds: float = DEFAULT_GEMINI_TIMEOUT_SECONDS,
+        timeout_seconds: float | None = None,
         transport: Any | None = None,
     ) -> None:
         self.api_key = api_key
         self.model = model or os.getenv("GEMINI_VISION_MODEL", DEFAULT_VISION_MODEL)
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else _gemini_timeout_seconds_from_env()
+        )
         self._transport = transport
 
     def extract_label(
@@ -302,6 +307,22 @@ def _is_timeout_error(exc: Exception) -> bool:
         "Timeout",
         "TimeoutError",
     }
+
+
+def _gemini_timeout_seconds_from_env() -> float:
+    raw_timeout = os.getenv(GEMINI_TIMEOUT_ENV)
+    if raw_timeout is None or not raw_timeout.strip():
+        return DEFAULT_GEMINI_TIMEOUT_SECONDS
+
+    try:
+        timeout_seconds = float(raw_timeout)
+    except ValueError:
+        return DEFAULT_GEMINI_TIMEOUT_SECONDS
+
+    if timeout_seconds <= 0:
+        return DEFAULT_GEMINI_TIMEOUT_SECONDS
+
+    return timeout_seconds
 
 
 def _parse_extracted_label_response(response: Any) -> ExtractedLabel:

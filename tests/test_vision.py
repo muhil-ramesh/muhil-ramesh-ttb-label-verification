@@ -138,6 +138,30 @@ def test_gemini_service_uses_strict_schema_and_inline_image() -> None:
     assert len(image_part["data"]) > 100
 
 
+def test_gemini_service_reads_timeout_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_TIMEOUT_SECONDS", "12.5")
+    transport = StubTransport(response=gemini_response(extracted_payload()))
+    service = GeminiVisionService(transport=transport)
+
+    service.extract_label(image_bytes())
+
+    [call] = transport.calls
+    assert call["timeout_seconds"] == 12.5
+
+
+def test_gemini_service_uses_default_timeout_for_invalid_environment(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_TIMEOUT_SECONDS", "not-a-number")
+    transport = StubTransport(response=gemini_response(extracted_payload()))
+    service = GeminiVisionService(transport=transport)
+
+    service.extract_label(image_bytes())
+
+    [call] = transport.calls
+    assert call["timeout_seconds"] == 15.0
+
+
 def test_non_label_or_unreadable_image_returns_all_nulls_from_model() -> None:
     null_payload = {field: None for field in EXTRACTED_LABEL_FIELDS}
     transport = StubTransport(response=gemini_response(null_payload))

@@ -3,22 +3,62 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>TTB Label Verification</title>
+    <title>TTB Label Check</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <main class="page-shell">
-      <section class="status-panel" aria-labelledby="page-title">
-        <p class="eyebrow">TTB Label Verification</p>
-        <h1 id="page-title">Server Check</h1>
-        <p class="intro">This page confirms the app is online before label features are added.</p>
+      <form id="verify-form" class="verify-form" novalidate>
+        <header class="page-header">
+          <p class="eyebrow">TTB Label Verification</p>
+          <h1>TTB Label Check</h1>
+        </header>
 
-        <div id="status-box" class="status-box status-box--loading" role="status" aria-live="polite">
-          Checking server status...
+        <section class="form-section" aria-labelledby="image-title">
+          <h2 id="image-title">Label Image</h2>
+          <label class="file-picker" for="image-input">
+            <span class="file-picker__title">Choose label image</span>
+            <span id="file-name" class="file-picker__meta">JPEG, PNG, or WebP</span>
+          </label>
+          <input id="image-input" name="image" type="file" accept="image/jpeg,image/png,image/webp" />
+          <img id="image-preview" class="image-preview" alt="Selected label preview" hidden />
+        </section>
+
+        <section class="form-section" aria-labelledby="fields-title">
+          <h2 id="fields-title">Application Information</h2>
+
+          <div class="field-grid">
+            <label class="field-label" for="brand-name">Brand Name</label>
+            <input id="brand-name" name="brand_name" type="text" autocomplete="off" required />
+
+            <label class="field-label" for="product-class">Product Type</label>
+            <input id="product-class" name="product_class" type="text" autocomplete="off" required />
+
+            <label class="field-label" for="producer-name">Producer Name</label>
+            <input id="producer-name" name="producer_name" type="text" autocomplete="off" required />
+
+            <label class="field-label" for="country-origin">Country of Origin</label>
+            <input id="country-origin" name="country_of_origin" type="text" autocomplete="off" required />
+
+            <label class="field-label" for="abv">Alcohol Content, like 45%</label>
+            <input id="abv" name="abv" type="text" autocomplete="off" required />
+
+            <label class="field-label" for="net-contents">Net Contents, like 750 mL</label>
+            <input id="net-contents" name="net_contents" type="text" autocomplete="off" required />
+
+            <label class="field-label" for="government-warning">Government Warning</label>
+            <textarea id="government-warning" name="government_warning" rows="5" required></textarea>
+          </div>
+        </section>
+
+        <div id="form-message" class="form-message" role="status" aria-live="polite">
+          Choose an image and fill in all fields to check the label.
         </div>
 
-        <button id="check-button" class="primary-button" type="button">Check Again</button>
-      </section>
+        <button id="submit-button" class="primary-button" type="submit" disabled>Check Label</button>
+      </form>
+
+      <section id="result-panel" class="result-panel" tabindex="-1" hidden aria-live="polite"></section>
     </main>
 
     <script src="/static/app.js"></script>
