@@ -5,6 +5,7 @@ description = "Phase 0 scaffold for the TTB Label Verification proof of concept"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.115.0",
+    "pillow>=12.2.0",
     "uvicorn[standard]>=0.30.0",
 ]
 

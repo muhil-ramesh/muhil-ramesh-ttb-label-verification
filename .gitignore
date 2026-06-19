@@ -21,6 +21,11 @@ build/
 dist/
 *.egg-info/
 
+# Generated local sample images
+samples/*.jpg
+samples/*.jpeg
+samples/*.png
+
 # Frontend dependencies/build output
 node_modules/
 coverage/
