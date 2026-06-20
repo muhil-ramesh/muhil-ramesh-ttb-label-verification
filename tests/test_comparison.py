@@ -189,6 +189,15 @@ def test_government_warning_exact_all_caps_passes() -> None:
     assert_pass(result)
 
 
+def test_government_warning_line_breaks_and_indentation_pass() -> None:
+    actual = "  GOVERNMENT WARNING:\n    THIS IS THE EXACT\n  WARNING TEXT  "
+
+    result = compare_government_warning(WARNING, actual)
+
+    assert_pass(result)
+    assert result.actual == actual
+
+
 def test_government_warning_failure_preserves_extracted_text() -> None:
     misread_warning = "GOVERNMENT WARNlNG: THIS IS THE EXACT WARNING TEXT"
 

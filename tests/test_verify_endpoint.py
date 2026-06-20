@@ -131,7 +131,7 @@ def test_verify_returns_needs_review_and_surfaces_warning_text(
     assert warning_result["status"] == "FAIL"
     assert warning_result["expected"] == WARNING
     assert warning_result["actual"] == misread_warning
-    assert warning_result["strategy"] == "exact_case_sensitive"
+    assert warning_result["strategy"] == "exact_case_sensitive_whitespace_normalized"
 
 
 def test_verify_passes_image_bytes_and_content_type_to_vision_service(

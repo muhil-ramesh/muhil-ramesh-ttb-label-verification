@@ -1,14 +1,37 @@
+const singleModeButton = document.querySelector("#single-mode-button");
+const batchModeButton = document.querySelector("#batch-mode-button");
 const form = document.querySelector("#verify-form");
+const batchForm = document.querySelector("#batch-form");
 const imageInput = document.querySelector("#image-input");
 const imagePreview = document.querySelector("#image-preview");
 const fileName = document.querySelector("#file-name");
 const formMessage = document.querySelector("#form-message");
 const submitButton = document.querySelector("#submit-button");
+const batchImageInput = document.querySelector("#batch-image-input");
+const batchFileName = document.querySelector("#batch-file-name");
+const batchRowsSection = document.querySelector("#batch-rows-section");
+const batchRowsContainer = document.querySelector("#batch-rows");
+const batchCopyFirstButton = document.querySelector("#batch-copy-first-button");
+const batchFormMessage = document.querySelector("#batch-form-message");
+const batchSubmitButton = document.querySelector("#batch-submit-button");
 const resultPanel = document.querySelector("#result-panel");
 
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const maxImageBytes = 8 * 1024 * 1024;
+const maxBatchLabels = 10;
 const requestTimeoutMs = 16000;
+const batchRequestTimeoutMs = 65000;
+const standardGovernmentWarning = "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink alcoholic beverages during pregnancy because of the risk of birth defects. (2) Consumption of alcoholic beverages impairs your ability to drive a car or operate machinery, and may cause health problems.";
+
+const fieldDefinitions = [
+  ["brand_name", "Brand Name", "input"],
+  ["product_class", "Product Type", "input"],
+  ["producer_name", "Producer Name", "input"],
+  ["country_of_origin", "Country of Origin", "input"],
+  ["abv", "Alcohol Content, like 45%", "input"],
+  ["net_contents", "Net Contents, like 750 mL", "input"],
+  ["government_warning", "Government Warning", "textarea"],
+];
 
 const fields = [
   ["brand_name", document.querySelector("#brand-name")],
@@ -20,15 +43,26 @@ const fields = [
   ["government_warning", document.querySelector("#government-warning")],
 ];
 
-const fieldLabels = {
-  brand_name: "Brand Name",
-  product_class: "Product Type",
-  producer_name: "Producer Name",
-  country_of_origin: "Country of Origin",
-  abv: "Alcohol Content",
-  net_contents: "Net Contents",
-  government_warning: "Government Warning",
-};
+const fieldLabels = Object.fromEntries(
+  fieldDefinitions.map(([name, label]) => [name, label.split(",")[0]]),
+);
+
+let batchRows = [];
+
+singleModeButton.addEventListener("click", () => setMode("single"));
+batchModeButton.addEventListener("click", () => setMode("batch"));
+
+function setMode(mode) {
+  const batchMode = mode === "batch";
+  form.hidden = batchMode;
+  batchForm.hidden = !batchMode;
+  singleModeButton.classList.toggle("mode-button--active", !batchMode);
+  batchModeButton.classList.toggle("mode-button--active", batchMode);
+  singleModeButton.setAttribute("aria-selected", String(!batchMode));
+  batchModeButton.setAttribute("aria-selected", String(batchMode));
+  resultPanel.hidden = true;
+  resultPanel.innerHTML = "";
+}
 
 function selectedImage() {
   return imageInput.files && imageInput.files.length > 0 ? imageInput.files[0] : null;
@@ -179,6 +213,236 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
+batchImageInput.addEventListener("change", () => {
+  const files = Array.from(batchImageInput.files || []);
+  batchRows = files.slice(0, maxBatchLabels).map((file, index) => ({
+    id: `label-${Date.now()}-${index}`,
+    file,
+    previewUrl: allowedTypes.has(file.type) && file.size > 0 ? URL.createObjectURL(file) : "",
+  }));
+  renderBatchRows();
+  updateBatchFormState();
+});
+
+batchRowsContainer.addEventListener("input", updateBatchFormState);
+batchRowsContainer.addEventListener("click", (event) => {
+  const removeButton = event.target.closest("[data-remove-row]");
+  if (!removeButton) {
+    return;
+  }
+  batchRows = batchRows.filter((row) => row.id !== removeButton.dataset.removeRow);
+  renderBatchRows();
+  updateBatchFormState();
+});
+
+batchCopyFirstButton.addEventListener("click", () => {
+  if (batchRows.length < 2) {
+    return;
+  }
+  const firstValues = batchRowData(batchRows[0].id);
+  for (const row of batchRows.slice(1)) {
+    for (const [name] of fieldDefinitions) {
+      const input = document.querySelector(`#batch-${row.id}-${name}`);
+      input.value = firstValues[name];
+    }
+  }
+  updateBatchFormState();
+});
+
+batchForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const validationMessage = validateBatchBeforeSubmit();
+  if (validationMessage) {
+    setBatchFormMessage(validationMessage, true);
+    return;
+  }
+
+  const formData = new FormData();
+  const rows = batchRows.slice();
+  formData.append("application_data", JSON.stringify(rows.map((row) => batchRowData(row.id))));
+  formData.append("image_ids", JSON.stringify(rows.map((row) => row.id)));
+  for (const row of rows) {
+    formData.append("images", row.file, row.file.name);
+  }
+
+  resultPanel.hidden = true;
+  resultPanel.innerHTML = "";
+  setBatchLoading(true, rows.length);
+
+  let progressTimer = setTimeout(() => renderBatchProgress(rows.length), 700);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), batchRequestTimeoutMs);
+
+  try {
+    const response = await fetch("/verify/batch", {
+      method: "POST",
+      body: formData,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    clearTimeout(progressTimer);
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(readableError(data));
+    }
+
+    renderBatchResults(data);
+    setBatchFormMessage("");
+  } catch (error) {
+    clearTimeout(progressTimer);
+    if (error.name === "AbortError") {
+      renderError("The batch took too long to finish. Try fewer or clearer images.");
+    } else {
+      renderError(error.message || "The batch could not be checked. Please try again.");
+    }
+  } finally {
+    clearTimeout(timeoutId);
+    setBatchLoading(false, rows.length);
+    updateBatchFormState();
+  }
+});
+
+function renderBatchRows() {
+  batchRowsSection.hidden = batchRows.length === 0;
+  batchFileName.textContent = batchRows.length === 0
+    ? "JPEG, PNG, or WebP"
+    : `${batchRows.length} label image${batchRows.length === 1 ? "" : "s"} selected`;
+
+  batchRowsContainer.innerHTML = batchRows.map((row, index) => `
+    <article class="batch-row" data-row-id="${escapeHtml(row.id)}">
+      <div class="batch-row__header">
+        <div>
+          <h3>Label ${index + 1}</h3>
+          <p class="batch-row__filename">${escapeHtml(row.file.name)}</p>
+        </div>
+        <button class="secondary-button" type="button" data-remove-row="${escapeHtml(row.id)}">Remove</button>
+      </div>
+      ${row.previewUrl ? `<img class="batch-preview" src="${row.previewUrl}" alt="Selected label preview" />` : ""}
+      <div class="field-grid">
+        ${fieldDefinitions.map(([name, label, type]) => renderBatchInput(row.id, name, label, type)).join("")}
+      </div>
+    </article>
+  `).join("");
+}
+
+function renderBatchInput(rowId, name, label, type) {
+  const inputId = `batch-${rowId}-${name}`;
+  const defaultValue = name === "government_warning" ? standardGovernmentWarning : "";
+  if (type === "textarea") {
+    return `
+      <label class="field-label" for="${escapeHtml(inputId)}">${escapeHtml(label)}</label>
+      <textarea id="${escapeHtml(inputId)}" rows="5" required>${escapeHtml(defaultValue)}</textarea>
+    `;
+  }
+  return `
+    <label class="field-label" for="${escapeHtml(inputId)}">${escapeHtml(label)}</label>
+    <input id="${escapeHtml(inputId)}" type="text" autocomplete="off" required />
+  `;
+}
+
+function batchRowData(rowId) {
+  const data = { id: rowId };
+  for (const [name] of fieldDefinitions) {
+    const input = document.querySelector(`#batch-${rowId}-${name}`);
+    data[name] = name === "government_warning" ? input.value : input.value.trim();
+  }
+  return data;
+}
+
+function allBatchRowsFilled() {
+  return batchRows.every((row) => {
+    return fieldDefinitions.every(([name]) => {
+      const input = document.querySelector(`#batch-${row.id}-${name}`);
+      return input && input.value.trim().length > 0;
+    });
+  });
+}
+
+function batchReady() {
+  return batchRows.length > 0
+    && batchRows.length <= maxBatchLabels
+    && batchRows.every((row) => allowedTypes.has(row.file.type) && row.file.size > 0 && row.file.size <= maxImageBytes)
+    && allBatchRowsFilled();
+}
+
+function updateBatchFormState() {
+  batchSubmitButton.disabled = !batchReady();
+  if (batchRows.length === 0) {
+    setBatchFormMessage("Choose label images to check together.");
+  } else if (batchRows.length > maxBatchLabels) {
+    setBatchFormMessage(`Check at most ${maxBatchLabels} labels at a time.`, true);
+  } else if (batchRows.some((row) => !allowedTypes.has(row.file.type))) {
+    setBatchFormMessage("Use JPEG, PNG, or WebP images.", true);
+  } else if (batchRows.some((row) => row.file.size === 0)) {
+    setBatchFormMessage("One image file is empty. Remove it or choose another image.", true);
+  } else if (batchRows.some((row) => row.file.size > maxImageBytes)) {
+    setBatchFormMessage("Use images smaller than 8 MB.", true);
+  } else if (!allBatchRowsFilled()) {
+    setBatchFormMessage("Fill in every field for every label.");
+  } else {
+    setBatchFormMessage("");
+  }
+}
+
+function validateBatchBeforeSubmit() {
+  if (batchRows.length === 0) {
+    return "Choose label images.";
+  }
+  if (batchRows.length > maxBatchLabels) {
+    return `Check at most ${maxBatchLabels} labels at a time.`;
+  }
+  if (batchRows.some((row) => !allowedTypes.has(row.file.type))) {
+    return "Use JPEG, PNG, or WebP images.";
+  }
+  if (batchRows.some((row) => row.file.size === 0)) {
+    return "One image file is empty. Remove it or choose another image.";
+  }
+  if (batchRows.some((row) => row.file.size > maxImageBytes)) {
+    return "Use images smaller than 8 MB.";
+  }
+  if (!allBatchRowsFilled()) {
+    return "Fill in every field for every label.";
+  }
+  return "";
+}
+
+function setBatchFormMessage(message, isError = false, isLoading = false) {
+  batchFormMessage.textContent = message;
+  batchFormMessage.className = "form-message";
+  if (isError) {
+    batchFormMessage.classList.add("form-message--error");
+  }
+  if (isLoading) {
+    batchFormMessage.classList.add("form-message--loading");
+  }
+}
+
+function setBatchLoading(isLoading, count) {
+  batchImageInput.disabled = isLoading;
+  batchCopyFirstButton.disabled = isLoading;
+  batchRowsContainer.querySelectorAll("input, textarea, button").forEach((input) => {
+    input.disabled = isLoading;
+  });
+  batchSubmitButton.disabled = isLoading || !batchReady();
+  batchSubmitButton.textContent = isLoading ? "Checking labels..." : "Check All Labels";
+  if (isLoading) {
+    setBatchFormMessage(`Checking ${count} label${count === 1 ? "" : "s"}...`, false, true);
+  }
+}
+
+function renderBatchProgress(count) {
+  resultPanel.hidden = false;
+  resultPanel.innerHTML = `
+    <div class="progress-panel">
+      <h2>Checking ${count} label${count === 1 ? "" : "s"}...</h2>
+      <div class="progress-bar" aria-hidden="true"><span></span></div>
+    </div>
+  `;
+  focusResults();
+}
+
 function readableError(data) {
   if (data && data.error && data.error.message) {
     return data.error.message;
@@ -215,6 +479,85 @@ function renderResults(data) {
     </div>
   `;
   focusResults();
+}
+
+function renderBatchResults(data) {
+  const checkedSeconds = typeof data.latency_ms === "number" ? (data.latency_ms / 1000).toFixed(1) : "0.0";
+  const itemsHtml = (data.items || []).map(renderBatchItemResult).join("");
+
+  resultPanel.hidden = false;
+  resultPanel.innerHTML = `
+    <div class="batch-summary">
+      <div class="summary-tile summary-tile--pass">
+        <span class="summary-tile__label">Approved</span>
+        <strong>${data.passed}</strong>
+      </div>
+      <div class="summary-tile summary-tile--review">
+        <span class="summary-tile__label">Needs Review</span>
+        <strong>${data.needs_review}</strong>
+      </div>
+      <div class="summary-tile summary-tile--error">
+        <span class="summary-tile__label">Errors</span>
+        <strong>${data.errors}</strong>
+      </div>
+      <div class="summary-tile">
+        <span class="summary-tile__label">Total</span>
+        <strong>${data.total}</strong>
+      </div>
+      <span class="batch-summary__time">Checked in ${checkedSeconds} seconds</span>
+    </div>
+    <div class="batch-results-list">
+      ${itemsHtml}
+    </div>
+  `;
+  focusResults();
+}
+
+function renderBatchItemResult(item) {
+  const passed = item.status === "PASS";
+  const needsReview = item.status === "NEEDS_REVIEW";
+  const statusClass = passed ? "status-badge--pass" : needsReview ? "status-badge--fail" : "status-badge--error";
+  const label = passed ? "APPROVED" : needsReview ? "NEEDS REVIEW" : "ERROR";
+  const open = passed ? "" : "open";
+  const filename = item.filename || item.id;
+  const seconds = typeof item.latency_ms === "number" ? (item.latency_ms / 1000).toFixed(1) : "0.0";
+  const body = item.status === "ERROR" ? renderBatchItemError(item) : renderBatchItemDetails(item);
+
+  return `
+    <details class="batch-item" ${open}>
+      <summary>
+        <span>
+          <strong>${escapeHtml(filename)}</strong>
+          <span class="batch-item__time">${seconds} seconds</span>
+        </span>
+        <span class="status-badge ${statusClass}">${label}</span>
+      </summary>
+      ${body}
+    </details>
+  `;
+}
+
+function renderBatchItemError(item) {
+  const message = item.error && item.error.message ? item.error.message : "This label could not be checked.";
+  return `
+    <div class="batch-item__body">
+      <div class="error-panel error-panel--compact">
+        <h3>Could not check this label</h3>
+        <p>${escapeHtml(message)}</p>
+      </div>
+    </div>
+  `;
+}
+
+function renderBatchItemDetails(item) {
+  const fieldsHtml = ((item.result && item.result.fields) || []).map(renderFieldResult).join("");
+  return `
+    <div class="batch-item__body">
+      <div class="results-list">
+        ${fieldsHtml}
+      </div>
+    </div>
+  `;
 }
 
 function renderFieldResult(result) {
@@ -265,7 +608,7 @@ function renderFailDetails(result, actual) {
 
 function failureReason(result) {
   if (result.field === "government_warning") {
-    return "The government warning must match exactly, including capital letters, punctuation, spaces, and line breaks.";
+    return "The government warning must match exactly in wording, capital letters, and punctuation. Line breaks do not matter.";
   }
   if (!result.actual) {
     return "This was not found on the label.";
@@ -293,4 +636,14 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function prefillStandardWarning() {
+  const warningInput = document.querySelector("#government-warning");
+  if (warningInput && !warningInput.value.trim()) {
+    warningInput.value = standardGovernmentWarning;
+  }
+}
+
+updateFormState();
+updateBatchFormState();
+prefillStandardWarning();
 updateFormState();

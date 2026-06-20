@@ -8,12 +8,22 @@
   </head>
   <body>
     <main class="page-shell">
-      <form id="verify-form" class="verify-form" novalidate>
-        <header class="page-header">
-          <p class="eyebrow">TTB Label Verification</p>
-          <h1>TTB Label Check</h1>
-        </header>
+      <header class="page-header">
+        <p class="eyebrow">TTB Label Verification</p>
+        <h1>TTB Label Check</h1>
+      </header>
 
+      <div class="mode-switch" role="tablist" aria-label="Verification mode">
+        <button id="single-mode-button" class="mode-button mode-button--active" type="button" role="tab" aria-selected="true" aria-controls="single-panel">
+          Single Label
+        </button>
+        <button id="batch-mode-button" class="mode-button" type="button" role="tab" aria-selected="false" aria-controls="batch-panel">
+          Batch Labels
+        </button>
+      </div>
+
+      <form id="verify-form" class="verify-form" novalidate>
+        <div id="single-panel">
         <section class="form-section" aria-labelledby="image-title">
           <h2 id="image-title">Label Image</h2>
           <label class="file-picker" for="image-input">
@@ -56,6 +66,34 @@
         </div>
 
         <button id="submit-button" class="primary-button" type="submit" disabled>Check Label</button>
+        </div>
+      </form>
+
+      <form id="batch-form" class="verify-form" novalidate hidden>
+        <div id="batch-panel">
+          <section class="form-section" aria-labelledby="batch-image-title">
+            <h2 id="batch-image-title">Label Images</h2>
+            <label class="file-picker" for="batch-image-input">
+              <span class="file-picker__title">Choose label images</span>
+              <span id="batch-file-name" class="file-picker__meta">JPEG, PNG, or WebP</span>
+            </label>
+            <input id="batch-image-input" name="images" type="file" accept="image/jpeg,image/png,image/webp" multiple />
+          </section>
+
+          <section id="batch-rows-section" class="form-section" aria-labelledby="batch-fields-title" hidden>
+            <div class="section-heading">
+              <h2 id="batch-fields-title">Application Information</h2>
+              <button id="batch-copy-first-button" class="secondary-button" type="button">Copy First Label to All</button>
+            </div>
+            <div id="batch-rows" class="batch-rows"></div>
+          </section>
+
+          <div id="batch-form-message" class="form-message" role="status" aria-live="polite">
+            Choose label images to check together.
+          </div>
+
+          <button id="batch-submit-button" class="primary-button" type="submit" disabled>Check All Labels</button>
+        </div>
       </form>
 
       <section id="result-panel" class="result-panel" tabindex="-1" hidden aria-live="polite"></section>

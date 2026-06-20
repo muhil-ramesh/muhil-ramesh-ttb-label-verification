@@ -328,7 +328,7 @@ def compare_net_contents(expected: str, actual: str | None) -> FieldResult:
 
 
 def compare_government_warning(expected: str, actual: str | None) -> FieldResult:
-    strategy = "exact_case_sensitive"
+    strategy = "exact_case_sensitive_whitespace_normalized"
     if actual is None:
         return _missing_actual_result(
             field="government_warning",
@@ -336,7 +336,11 @@ def compare_government_warning(expected: str, actual: str | None) -> FieldResult
             strategy=strategy,
         )
 
-    status = FieldStatus.PASS if expected == actual else FieldStatus.FAIL
+    status = (
+        FieldStatus.PASS
+        if _normalize_warning_layout(expected) == _normalize_warning_layout(actual)
+        else FieldStatus.FAIL
+    )
     return _field_result(
         field="government_warning",
         status=status,
@@ -350,6 +354,10 @@ def compare_government_warning(expected: str, actual: str | None) -> FieldResult
             else "Government warning did not match exactly."
         ),
     )
+
+
+def _normalize_warning_layout(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
 
 
 def verify_label(
