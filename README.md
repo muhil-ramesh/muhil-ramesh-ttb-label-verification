@@ -6,7 +6,6 @@ Proof-of-concept web app for checking alcohol label images against submitted app
 
 Deployed URL: https://ttb-label-verification-production-6496.up.railway.app
 
-Repository: https://github.com/muhil-ramesh/muhil-ramesh-ttb-label-verification
 
 ## What This Does
 
