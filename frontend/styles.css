@@ -147,6 +147,12 @@ h3 {
   background: #e0f0ff;
 }
 
+.file-picker--secondary {
+  margin-top: 18px;
+  border-color: var(--border);
+  background: #ffffff;
+}
+
 .file-picker__title {
   display: block;
   color: var(--action-dark);
@@ -170,6 +176,10 @@ h3 {
   border-radius: 8px;
   background: #ffffff;
   object-fit: contain;
+}
+
+.image-preview[hidden] {
+  display: none;
 }
 
 .field-grid {
@@ -209,6 +219,9 @@ textarea {
 input:focus,
 textarea:focus,
 .primary-button:focus,
+.secondary-button:focus,
+.mode-button:focus,
+.batch-item summary:focus-visible,
 .file-picker:focus {
   outline: 4px solid rgba(0, 94, 168, 0.24);
   outline-offset: 2px;

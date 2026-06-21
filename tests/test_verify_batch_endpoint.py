@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from backend.app.api import MAX_BATCH_LABELS, get_vision_service
 from backend.app.main import app
 from backend.app.models import ExtractedLabel
-from backend.app.vision import VisionTimeoutError
+from backend.app.vision import VisionRateLimitError, VisionTimeoutError
 
 
 WARNING = "GOVERNMENT WARNING: EXACTLY AS PRINTED"
@@ -262,6 +262,35 @@ def test_batch_invalid_file_type_is_item_error() -> None:
     app.dependency_overrides.clear()
 
 
+def test_batch_rate_limited_item_does_not_fail_whole_batch() -> None:
+    service = MappingVisionService(
+        {
+            b"image-1": extracted_label(),
+            b"image-2": VisionRateLimitError("quota reached"),
+        }
+    )
+    with client_for(service) as client:
+        response = post_batch(
+            client,
+            items=[application_item("row-1"), application_item("row-2")],
+            image_ids=["row-1", "row-2"],
+            files=[
+                ("one.jpg", b"image-1", "image/jpeg"),
+                ("two.jpg", b"image-2", "image/jpeg"),
+            ],
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["passed"] == 1
+    assert body["errors"] == 1
+    assert body["items"][1]["error"] == {
+        "code": "vision_rate_limited",
+        "message": "The vision service is temporarily busy. Try again in a minute.",
+    }
+    app.dependency_overrides.clear()
+
+
 def test_batch_rejects_request_level_invalid_json() -> None:
     service = MappingVisionService({})
     with client_for(service) as client:
@@ -278,6 +307,28 @@ def test_batch_rejects_request_level_invalid_json() -> None:
         400,
         "invalid_application_data",
         "Batch application data must be valid JSON.",
+    )
+    app.dependency_overrides.clear()
+
+
+def test_batch_rejects_duplicate_application_ids() -> None:
+    service = MappingVisionService({})
+    with client_for(service) as client:
+        response = post_batch(
+            client,
+            items=[application_item("row-1"), application_item("row-1")],
+            image_ids=["row-1", "row-2"],
+            files=[
+                ("one.jpg", b"image-1", "image/jpeg"),
+                ("two.jpg", b"image-2", "image/jpeg"),
+            ],
+        )
+
+    assert_batch_error(
+        response,
+        400,
+        "duplicate_application_ids",
+        "Batch application IDs must be unique.",
     )
     app.dependency_overrides.clear()
 

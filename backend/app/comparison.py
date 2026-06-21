@@ -139,6 +139,11 @@ _COUNTRY_SYNONYMS = {
 
 def _canonical_country(value: str) -> str:
     normalized = _normalize_text(value)
+    normalized = re.sub(
+        r"^(?:product\s+of|produced\s+in|made\s+in|country\s+of\s+origin)\s+",
+        "",
+        normalized,
+    )
     return _COUNTRY_SYNONYMS.get(normalized, normalized)
 
 

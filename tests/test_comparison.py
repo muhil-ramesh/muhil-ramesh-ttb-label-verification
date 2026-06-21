@@ -92,6 +92,12 @@ def test_country_synonym_with_punctuation_matches() -> None:
     assert_pass(result)
 
 
+def test_country_product_of_prefix_matches_country() -> None:
+    result = compare_country("USA", "Product of USA")
+
+    assert_pass(result)
+
+
 def test_country_different_country_fails() -> None:
     result = compare_country("United States", "Canada")
 
@@ -181,6 +187,13 @@ def test_government_warning_missing_colon_fails() -> None:
     )
 
     assert_fail(result)
+
+
+def test_government_warning_missing_value_fails() -> None:
+    result = compare_government_warning(WARNING, None)
+
+    assert_fail(result)
+    assert result.actual is None
 
 
 def test_government_warning_exact_all_caps_passes() -> None:

@@ -28,6 +28,7 @@ from backend.app.vision import (
     VisionInvalidImageError,
     VisionParseError,
     VisionProviderError,
+    VisionRateLimitError,
     VisionService,
     VisionTimeoutError,
 )
@@ -61,7 +62,9 @@ async def verify(
         return _error_response(*image_error, start=start)
 
     assert image is not None
+    image_read_start = time.perf_counter()
     image_bytes = await image.read(MAX_IMAGE_BYTES + 1)
+    image_read_ms = _latency_ms(image_read_start)
     if not image_bytes:
         return _error_response(
             400,
@@ -86,13 +89,19 @@ async def verify(
             image_bytes,
             content_type=image.content_type,
         )
+        comparison_start = time.perf_counter()
         result = verify_label(application, extracted_label)
+        comparison_ms = _latency_ms(comparison_start)
         result.extracted_label = extracted_label
         result.latency_ms = _latency_ms(start)
         logger.info(
-            "verify completed verdict=%s latency_ms=%s",
+            "verify completed verdict=%s latency_ms=%s image_read_ms=%s "
+            "comparison_ms=%s upload_bytes=%s",
             result.verdict,
             result.latency_ms,
+            image_read_ms,
+            comparison_ms,
+            len(image_bytes),
         )
         return result
     except VisionInvalidImageError:
@@ -111,7 +120,7 @@ async def verify(
         )
     except VisionConfigurationError:
         return _error_response(
-            500,
+            503,
             "vision_not_configured",
             "Vision service is not configured.",
             start=start,
@@ -121,6 +130,13 @@ async def verify(
             502,
             "vision_parse_error",
             "The vision service returned an unreadable extraction result.",
+            start=start,
+        )
+    except VisionRateLimitError:
+        return _error_response(
+            503,
+            "vision_rate_limited",
+            "The vision service is temporarily busy. Try again in a minute.",
             start=start,
         )
     except VisionProviderError:
@@ -281,6 +297,20 @@ def _parse_batch_application_data(application_data: str | None) -> list[Any] | J
             "Add at least one label to check.",
         )
 
+    item_ids = [
+        item.get("id").strip()
+        for item in payload
+        if isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and item.get("id").strip()
+    ]
+    if len(item_ids) != len(set(item_ids)):
+        return _plain_error_response(
+            400,
+            "duplicate_application_ids",
+            "Batch application IDs must be unique.",
+        )
+
     return payload
 
 
@@ -364,42 +394,51 @@ async def _read_batch_uploads(
 ) -> dict[str, BatchUpload]:
     uploads: dict[str, BatchUpload] = {}
     for image_id, image in zip(image_ids, images, strict=True):
-        metadata_error = _validate_image_metadata(image)
-        if metadata_error is not None:
-            _, code, message = metadata_error
-            uploads[image_id] = BatchUpload(
-                filename=image.filename,
-                content_type=image.content_type,
-                error=BatchItemError(code=code, message=message),
-            )
-            continue
-
-        image_bytes = await image.read(MAX_IMAGE_BYTES + 1)
-        if not image_bytes:
-            uploads[image_id] = BatchUpload(
-                filename=image.filename,
-                content_type=image.content_type,
-                error=BatchItemError(
-                    code="empty_image",
-                    message="Upload a non-empty label image.",
-                ),
-            )
-        elif len(image_bytes) > MAX_IMAGE_BYTES:
-            uploads[image_id] = BatchUpload(
-                filename=image.filename,
-                content_type=image.content_type,
-                error=BatchItemError(
-                    code="image_too_large",
-                    message="Upload a label image smaller than 8 MB.",
-                ),
-            )
-        else:
-            uploads[image_id] = BatchUpload(
-                filename=image.filename,
-                content_type=image.content_type,
-                image_bytes=image_bytes,
-            )
+        uploads[image_id] = await _read_upload(image)
     return uploads
+
+
+async def _read_upload(image: UploadFile) -> BatchUpload:
+    metadata_error = _validate_image_metadata(image)
+    if metadata_error is not None:
+        _, code, message = metadata_error
+        return BatchUpload(
+            filename=image.filename,
+            content_type=image.content_type,
+            error=BatchItemError(code=code, message=message),
+        )
+
+    image_bytes = await image.read(MAX_IMAGE_BYTES + 1)
+    if not image_bytes:
+        return BatchUpload(
+            filename=image.filename,
+            content_type=image.content_type,
+            error=BatchItemError(
+                code="empty_image",
+                message="Upload a non-empty label image.",
+            ),
+        )
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        return BatchUpload(
+            filename=image.filename,
+            content_type=image.content_type,
+            error=BatchItemError(
+                code="image_too_large",
+                message="Upload a label image smaller than 8 MB.",
+            ),
+        )
+
+    return BatchUpload(
+        filename=image.filename,
+        content_type=image.content_type,
+        image_bytes=image_bytes,
+    )
+
+
+def _status_for_upload_error(code: str) -> int:
+    if code == "image_too_large":
+        return 413
+    return 400
 
 
 async def _process_batch_item(
@@ -504,6 +543,14 @@ async def _process_batch_item(
             upload.filename,
             "vision_parse_error",
             "The vision service returned an unreadable extraction result.",
+            start=start,
+        )
+    except VisionRateLimitError:
+        return _batch_item_error(
+            item_id,
+            upload.filename,
+            "vision_rate_limited",
+            "The vision service is temporarily busy. Try again in a minute.",
             start=start,
         )
     except VisionProviderError:

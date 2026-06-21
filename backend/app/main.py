@@ -1,4 +1,5 @@
 import os
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -10,6 +11,11 @@ from backend.app.api import router as api_router
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = ROOT_DIR / "frontend"
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(levelname)s:%(name)s:%(message)s",
+)
 
 app = FastAPI(title="TTB Label Verification", version="0.1.0")
 app.include_router(api_router)

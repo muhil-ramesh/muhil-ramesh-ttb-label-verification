@@ -1,5 +1,6 @@
 from io import BytesIO
 import json
+from urllib.error import HTTPError
 
 import pytest
 from PIL import Image
@@ -12,6 +13,7 @@ from backend.app.vision import (
     VisionConfigurationError,
     VisionInvalidImageError,
     VisionParseError,
+    VisionRateLimitError,
     VisionTimeoutError,
     extracted_label_json_schema,
     preprocess_label_image,
@@ -78,13 +80,42 @@ def test_fake_vision_service_returns_label_and_records_call() -> None:
     assert service.calls[0].content_type == "image/jpeg"
 
 
+def test_gemini_service_defaults_to_flash_lite_model(monkeypatch) -> None:
+    monkeypatch.delenv("GEMINI_VISION_MODEL", raising=False)
+
+    service = GeminiVisionService(transport=StubTransport())
+
+    assert service.model == "gemini-3.1-flash-lite"
+
+
 def test_preprocess_downscales_and_reencodes_to_jpeg_data_url() -> None:
-    processed = preprocess_label_image(image_bytes((2400, 1200)), max_long_side=1600)
+    processed = preprocess_label_image(image_bytes((2400, 1200)))
 
     assert processed.content_type == "image/jpeg"
     assert processed.data_url.startswith("data:image/jpeg;base64,")
-    assert max(processed.width, processed.height) == 1600
+    assert processed.original_width == 2400
+    assert processed.original_height == 1200
+    assert max(processed.width, processed.height) == 1024
     assert processed.data.startswith(b"\xff\xd8")
+    assert len(processed.data) < 500_000
+
+
+def test_preprocess_size_and_quality_are_configurable(monkeypatch) -> None:
+    monkeypatch.setenv("IMAGE_MAX_LONG_SIDE", "900")
+    monkeypatch.setenv("IMAGE_JPEG_QUALITY", "72")
+
+    processed = preprocess_label_image(image_bytes((2400, 1200)))
+
+    assert max(processed.width, processed.height) == 900
+
+
+def test_preprocess_ignores_invalid_size_and_quality_env(monkeypatch) -> None:
+    monkeypatch.setenv("IMAGE_MAX_LONG_SIDE", "200")
+    monkeypatch.setenv("IMAGE_JPEG_QUALITY", "120")
+
+    processed = preprocess_label_image(image_bytes((2400, 1200)))
+
+    assert max(processed.width, processed.height) == 1024
 
 
 def test_invalid_image_fails_before_provider_call() -> None:
@@ -117,7 +148,9 @@ def test_gemini_service_uses_strict_schema_and_inline_image() -> None:
     request_body = call["request_body"]
     generation_config = request_body["generationConfig"]
     assert generation_config["candidateCount"] == 1
+    assert generation_config["maxOutputTokens"] == 700
     assert generation_config["temperature"] == 0
+    assert generation_config["thinkingConfig"] == {"thinkingLevel": "minimal"}
 
     response_format = generation_config["responseFormat"]["text"]
     assert response_format["mimeType"] == "APPLICATION_JSON"
@@ -129,8 +162,7 @@ def test_gemini_service_uses_strict_schema_and_inline_image() -> None:
 
     prompt = request_body["contents"][0]["parts"][0]["text"]
     assert "character-for-character" in prompt
-    assert "Do not complete the statutory warning from memory." in prompt
-    assert "Do not normalize case." in prompt
+    assert "Do not complete it from memory." in prompt
 
     image_part = request_body["contents"][0]["parts"][1]["inline_data"]
     assert image_part["mime_type"] == "image/jpeg"
@@ -149,6 +181,32 @@ def test_gemini_service_reads_timeout_from_environment(monkeypatch) -> None:
     assert call["timeout_seconds"] == 12.5
 
 
+def test_gemini_service_reads_thinking_level_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_THINKING_LEVEL", "low")
+    transport = StubTransport(response=gemini_response(extracted_payload()))
+    service = GeminiVisionService(transport=transport)
+
+    service.extract_label(image_bytes())
+
+    [call] = transport.calls
+    generation_config = call["request_body"]["generationConfig"]
+    assert generation_config["thinkingConfig"] == {"thinkingLevel": "low"}
+
+
+def test_gemini_service_uses_default_thinking_level_for_invalid_environment(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_THINKING_LEVEL", "slow")
+    transport = StubTransport(response=gemini_response(extracted_payload()))
+    service = GeminiVisionService(transport=transport)
+
+    service.extract_label(image_bytes())
+
+    [call] = transport.calls
+    generation_config = call["request_body"]["generationConfig"]
+    assert generation_config["thinkingConfig"] == {"thinkingLevel": "minimal"}
+
+
 def test_gemini_service_uses_default_timeout_for_invalid_environment(
     monkeypatch,
 ) -> None:
@@ -159,7 +217,7 @@ def test_gemini_service_uses_default_timeout_for_invalid_environment(
     service.extract_label(image_bytes())
 
     [call] = transport.calls
-    assert call["timeout_seconds"] == 15.0
+    assert call["timeout_seconds"] == 7.5
 
 
 def test_non_label_or_unreadable_image_returns_all_nulls_from_model() -> None:
@@ -214,6 +272,24 @@ def test_provider_timeout_maps_to_typed_timeout_error() -> None:
     service = GeminiVisionService(transport=transport)
 
     with pytest.raises(VisionTimeoutError):
+        service.extract_label(image_bytes())
+
+
+def test_gemini_429_maps_to_rate_limit_error(monkeypatch) -> None:
+    def raise_rate_limit(request, timeout):
+        raise HTTPError(
+            request.full_url,
+            429,
+            "Too Many Requests",
+            hdrs=None,
+            fp=BytesIO(b'{"error":{"status":"RESOURCE_EXHAUSTED"}}'),
+        )
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr("backend.app.vision.urlopen", raise_rate_limit)
+    service = GeminiVisionService()
+
+    with pytest.raises(VisionRateLimitError):
         service.extract_label(image_bytes())
 
 

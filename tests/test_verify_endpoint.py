@@ -9,9 +9,11 @@ from backend.app.main import app
 from backend.app.models import ExtractedLabel, VerificationVerdict
 from backend.app.vision import (
     FakeVisionService,
+    VisionConfigurationError,
     VisionInvalidImageError,
     VisionParseError,
     VisionProviderError,
+    VisionRateLimitError,
     VisionTimeoutError,
 )
 
@@ -132,6 +134,25 @@ def test_verify_returns_needs_review_and_surfaces_warning_text(
     assert warning_result["expected"] == WARNING
     assert warning_result["actual"] == misread_warning
     assert warning_result["strategy"] == "exact_case_sensitive_whitespace_normalized"
+
+
+def test_verify_accepts_warning_with_label_line_breaks(
+    client: TestClient,
+    fake_service: FakeVisionService,
+) -> None:
+    wrapped_warning = "GOVERNMENT\n WARNING:\n  EXACTLY AS\n PRINTED"
+    fake_service.label = extracted_label(government_warning=wrapped_warning)
+
+    response = post_verify(client)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["verdict"] == VerificationVerdict.PASS
+    warning_result = next(
+        field for field in body["fields"] if field["field"] == "government_warning"
+    )
+    assert warning_result["status"] == "PASS"
+    assert warning_result["actual"] == wrapped_warning
 
 
 def test_verify_passes_image_bytes_and_content_type_to_vision_service(
@@ -261,6 +282,22 @@ def test_verify_maps_vision_timeout_to_504(
     )
 
 
+def test_verify_maps_missing_vision_configuration_to_503(
+    client: TestClient,
+    fake_service: FakeVisionService,
+) -> None:
+    fake_service.error = VisionConfigurationError("missing key")
+
+    response = post_verify(client)
+
+    assert_error(
+        response,
+        503,
+        "vision_not_configured",
+        "Vision service is not configured.",
+    )
+
+
 def test_verify_maps_vision_invalid_image_to_400(
     client: TestClient,
     fake_service: FakeVisionService,
@@ -285,6 +322,22 @@ def test_verify_maps_vision_provider_error_to_502(
         502,
         "vision_provider_error",
         "The vision service could not process the label image.",
+    )
+
+
+def test_verify_maps_vision_rate_limit_to_503(
+    client: TestClient,
+    fake_service: FakeVisionService,
+) -> None:
+    fake_service.error = VisionRateLimitError("quota reached")
+
+    response = post_verify(client)
+
+    assert_error(
+        response,
+        503,
+        "vision_rate_limited",
+        "The vision service is temporarily busy. Try again in a minute.",
     )
 
 

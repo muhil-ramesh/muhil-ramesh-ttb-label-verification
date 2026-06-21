@@ -11,7 +11,7 @@ def test_frontend_verify_request_has_client_timeout() -> None:
 
     assert response.status_code == 200
     assert "AbortController" in response.text
-    assert "requestTimeoutMs = 16000" in response.text
+    assert "requestTimeoutMs = 9000" in response.text
     assert "The label took too long to read." in response.text
     assert "Line breaks do not matter." in response.text
 
@@ -30,10 +30,13 @@ def test_frontend_batch_view_is_available() -> None:
 
     assert response.status_code == 200
     assert "Batch Labels" in response.text
-    assert "Choose label images" in response.text
+    assert "Add label images" in response.text
+    assert "back-image-input" not in response.text
+    assert "Choose back label image" not in response.text
     assert "batch-image-input" in response.text
     assert "multiple" in response.text
     assert "Check All Labels" in response.text
+    assert "Copy First Label to All" not in response.text
 
 
 def test_frontend_batch_request_has_summary_drilldown_and_progress() -> None:
@@ -42,6 +45,12 @@ def test_frontend_batch_request_has_summary_drilldown_and_progress() -> None:
     assert response.status_code == 200
     assert 'fetch("/verify/batch"' in response.text
     assert 'formData.append("image_ids"' in response.text
+    assert 'formData.append("images"' in response.text
+    assert "data-back-image-row" not in response.text
+    assert "backFile" not in response.text
+    assert "batchRows = batchRows.concat" in response.text
+    assert "batchImageInput.value = \"\"" in response.text
+    assert "batchCopyFirstButton" not in response.text
     assert "Approved" in response.text
     assert "Needs Review" in response.text
     assert "Total" in response.text
@@ -50,3 +59,20 @@ def test_frontend_batch_request_has_summary_drilldown_and_progress() -> None:
     assert "Found" in response.text
     assert "Checking ${count} label" in response.text
     assert "progress-bar" in response.text
+    assert 'role="progressbar"' in response.text
+    assert 'aria-label="Checking labels"' in response.text
+
+
+def test_frontend_accessibility_hooks_are_present() -> None:
+    html = client.get("/").text
+    css = client.get("/static/styles.css").text
+    js = client.get("/static/app.js").text
+
+    assert 'aria-live="polite"' in html
+    assert 'role="tablist"' in html
+    assert 'aria-controls="batch-panel"' in html
+    assert 'aria-busy' in js
+    assert ".mode-button:focus" in css
+    assert ".secondary-button:focus" in css
+    assert ".batch-item summary:focus-visible" in css
+    assert ".image-preview[hidden]" in css

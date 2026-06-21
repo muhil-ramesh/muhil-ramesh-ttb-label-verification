@@ -4,8 +4,10 @@ import base64
 from dataclasses import dataclass, field
 from io import BytesIO
 import json
+import logging
 import os
 import socket
+import time
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -17,14 +19,19 @@ from pydantic import ValidationError
 from backend.app.models import ExtractedLabel
 
 
-DEFAULT_VISION_MODEL = "gemini-3.5-flash"
-DEFAULT_GEMINI_TIMEOUT_SECONDS = 15.0
+logger = logging.getLogger("backend.app.vision")
+
+DEFAULT_VISION_MODEL = "gemini-3.1-flash-lite"
+DEFAULT_GEMINI_TIMEOUT_SECONDS = 7.5
 GEMINI_TIMEOUT_ENV = "GEMINI_TIMEOUT_SECONDS"
+GEMINI_THINKING_LEVEL_ENV = "GEMINI_THINKING_LEVEL"
+IMAGE_MAX_LONG_SIDE_ENV = "IMAGE_MAX_LONG_SIDE"
+IMAGE_JPEG_QUALITY_ENV = "IMAGE_JPEG_QUALITY"
 GEMINI_API_ENDPOINT = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
-MAX_IMAGE_LONG_SIDE = 1600
-JPEG_QUALITY = 88
+MAX_IMAGE_LONG_SIDE = 1024
+JPEG_QUALITY = 80
 
 EXTRACTED_LABEL_FIELDS = (
     "brand_name",
@@ -37,28 +44,11 @@ EXTRACTED_LABEL_FIELDS = (
 )
 
 VISION_EXTRACTION_PROMPT = """
-Extract visible text from this alcohol label into the required structured fields.
-
-Use only text visible in the image. Do not infer, correct, normalize, or guess.
-If a field is not visible or not confidently readable, return null.
-If the image is not an alcohol label, return null for every field.
-
-Fields:
-- brand_name
-- product_class
-- producer_name
-- country_of_origin
-- abv
-- net_contents
-- government_warning
-
-For government_warning, copy the visible warning character-for-character.
-Preserve capitalization, punctuation, spacing, line breaks if present, and OCR-like mistakes.
-Do not complete the statutory warning from memory.
-Do not correct spelling.
-Do not normalize case.
-If partly readable, return only the readable visible text exactly.
-If no meaningful warning text is readable, return null.
+Extract visible alcohol-label text into JSON fields:
+brand_name, product_class, producer_name, country_of_origin, abv, net_contents, government_warning.
+Use null for unknown, unreadable, or non-label fields. Do not infer, correct, normalize, or guess.
+For government_warning, copy visible warning text character-for-character, preserving capitalization,
+punctuation, spacing, line breaks, and OCR-like mistakes. Do not complete it from memory.
 """.strip()
 
 
@@ -76,6 +66,10 @@ class VisionInvalidImageError(VisionServiceError):
 
 class VisionTimeoutError(VisionServiceError):
     """Raised when the model call times out."""
+
+
+class VisionRateLimitError(VisionServiceError):
+    """Raised when the model provider rejects the request for quota/rate limits."""
 
 
 class VisionProviderError(VisionServiceError):
@@ -100,6 +94,8 @@ class ProcessedImage:
     data: bytes
     content_type: str
     data_url: str
+    original_width: int
+    original_height: int
     width: int
     height: int
 
@@ -144,15 +140,29 @@ def extracted_label_json_schema() -> dict[str, Any]:
 def preprocess_label_image(
     image_bytes: bytes,
     *,
-    max_long_side: int = MAX_IMAGE_LONG_SIDE,
-    jpeg_quality: int = JPEG_QUALITY,
+    max_long_side: int | None = None,
+    jpeg_quality: int | None = None,
 ) -> ProcessedImage:
     if not image_bytes:
         raise VisionInvalidImageError("Image upload is empty.")
 
+    max_long_side = max_long_side or _int_from_env(
+        IMAGE_MAX_LONG_SIDE_ENV,
+        default=MAX_IMAGE_LONG_SIDE,
+        minimum=640,
+        maximum=2000,
+    )
+    jpeg_quality = jpeg_quality or _int_from_env(
+        IMAGE_JPEG_QUALITY_ENV,
+        default=JPEG_QUALITY,
+        minimum=60,
+        maximum=95,
+    )
+
     try:
         with Image.open(BytesIO(image_bytes)) as image:
             image = ImageOps.exif_transpose(image)
+            original_width, original_height = image.size
             image = _to_rgb_on_white(image)
             image.thumbnail(
                 (max_long_side, max_long_side),
@@ -178,6 +188,8 @@ def preprocess_label_image(
         data=data,
         content_type="image/jpeg",
         data_url=data_url,
+        original_width=original_width,
+        original_height=original_height,
         width=image.width,
         height=image.height,
     )
@@ -217,6 +229,7 @@ class GeminiVisionService:
             if timeout_seconds is not None
             else _gemini_timeout_seconds_from_env()
         )
+        self.thinking_level = _gemini_thinking_level_from_env()
         self._transport = transport
 
     def extract_label(
@@ -224,12 +237,73 @@ class GeminiVisionService:
         image_bytes: bytes,
         content_type: str | None = None,
     ) -> ExtractedLabel:
+        start = time.perf_counter()
         processed_image = preprocess_label_image(image_bytes)
-        response = self._create_response(processed_image)
-        return _parse_extracted_label_response(response)
+        preprocess_ms = _elapsed_ms(start)
+        provider_start = time.perf_counter()
+        try:
+            response = self._create_response(processed_image)
+        except VisionTimeoutError:
+            logger.warning(
+                "vision extraction timed out model=%s timeout_seconds=%s "
+                "input_bytes=%s processed_bytes=%s original_size=%sx%s "
+                "processed_size=%sx%s preprocess_ms=%s total_ms=%s",
+                self.model,
+                self.timeout_seconds,
+                len(image_bytes),
+                len(processed_image.data),
+                processed_image.original_width,
+                processed_image.original_height,
+                processed_image.width,
+                processed_image.height,
+                preprocess_ms,
+                _elapsed_ms(start),
+            )
+            raise
+        except (VisionProviderError, VisionRateLimitError) as exc:
+            logger.warning(
+                "vision extraction provider failed model=%s input_bytes=%s "
+                "processed_bytes=%s original_size=%sx%s processed_size=%sx%s "
+                "preprocess_ms=%s total_ms=%s detail=%s",
+                self.model,
+                len(image_bytes),
+                len(processed_image.data),
+                processed_image.original_width,
+                processed_image.original_height,
+                processed_image.width,
+                processed_image.height,
+                preprocess_ms,
+                _elapsed_ms(start),
+                exc,
+            )
+            raise
+        provider_ms = _elapsed_ms(provider_start)
+        parse_start = time.perf_counter()
+        label = _parse_extracted_label_response(response)
+        parse_ms = _elapsed_ms(parse_start)
+        logger.info(
+            "vision extraction completed model=%s input_bytes=%s processed_bytes=%s "
+            "original_size=%sx%s processed_size=%sx%s preprocess_ms=%s provider_ms=%s "
+            "parse_ms=%s total_ms=%s",
+            self.model,
+            len(image_bytes),
+            len(processed_image.data),
+            processed_image.original_width,
+            processed_image.original_height,
+            processed_image.width,
+            processed_image.height,
+            preprocess_ms,
+            provider_ms,
+            parse_ms,
+            _elapsed_ms(start),
+        )
+        return label
 
     def _create_response(self, processed_image: ProcessedImage) -> Any:
-        request_body = _build_gemini_request_body(processed_image)
+        request_body = _build_gemini_request_body(
+            processed_image,
+            thinking_level=self.thinking_level,
+        )
         try:
             if self._transport is not None:
                 return self._transport(request_body, self.timeout_seconds, self.model)
@@ -262,23 +336,26 @@ class GeminiVisionService:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            if exc.code == 429:
+                raise VisionRateLimitError(
+                    f"Gemini API quota or rate limit was reached: {detail}"
+                ) from exc
             raise VisionProviderError(f"Gemini API request failed: {detail}") from exc
         except json.JSONDecodeError as exc:
             raise VisionParseError("Gemini API response was not valid JSON.") from exc
 
 
-def _build_gemini_request_body(processed_image: ProcessedImage) -> dict[str, Any]:
+def _build_gemini_request_body(
+    processed_image: ProcessedImage,
+    *,
+    thinking_level: str,
+) -> dict[str, Any]:
     return {
         "contents": [
             {
                 "role": "user",
                 "parts": [
-                    {
-                        "text": (
-                            f"{VISION_EXTRACTION_PROMPT}\n\n"
-                            "Extract the required label fields."
-                        )
-                    },
+                    {"text": VISION_EXTRACTION_PROMPT},
                     {
                         "inline_data": {
                             "mime_type": processed_image.content_type,
@@ -290,7 +367,11 @@ def _build_gemini_request_body(processed_image: ProcessedImage) -> dict[str, Any
         ],
         "generationConfig": {
             "candidateCount": 1,
+            "maxOutputTokens": 700,
             "temperature": 0,
+            "thinkingConfig": {
+                "thinkingLevel": thinking_level,
+            },
             "responseFormat": _structured_output_format(),
         },
     }
@@ -309,6 +390,10 @@ def _is_timeout_error(exc: Exception) -> bool:
     }
 
 
+def _elapsed_ms(start: float) -> int:
+    return max(0, int((time.perf_counter() - start) * 1000))
+
+
 def _gemini_timeout_seconds_from_env() -> float:
     raw_timeout = os.getenv(GEMINI_TIMEOUT_ENV)
     if raw_timeout is None or not raw_timeout.strip():
@@ -323,6 +408,40 @@ def _gemini_timeout_seconds_from_env() -> float:
         return DEFAULT_GEMINI_TIMEOUT_SECONDS
 
     return timeout_seconds
+
+
+def _gemini_thinking_level_from_env() -> str:
+    raw_level = os.getenv(GEMINI_THINKING_LEVEL_ENV)
+    if raw_level is None or not raw_level.strip():
+        return "minimal"
+
+    level = raw_level.strip().lower()
+    if level not in {"minimal", "low", "medium", "high"}:
+        return "minimal"
+
+    return level
+
+
+def _int_from_env(
+    env_name: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw_value = os.getenv(env_name)
+    if raw_value is None or not raw_value.strip():
+        return default
+
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return default
+
+    if value < minimum or value > maximum:
+        return default
+
+    return value
 
 
 def _parse_extracted_label_response(response: Any) -> ExtractedLabel:

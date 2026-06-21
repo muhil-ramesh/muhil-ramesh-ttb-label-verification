@@ -11,7 +11,6 @@ const batchImageInput = document.querySelector("#batch-image-input");
 const batchFileName = document.querySelector("#batch-file-name");
 const batchRowsSection = document.querySelector("#batch-rows-section");
 const batchRowsContainer = document.querySelector("#batch-rows");
-const batchCopyFirstButton = document.querySelector("#batch-copy-first-button");
 const batchFormMessage = document.querySelector("#batch-form-message");
 const batchSubmitButton = document.querySelector("#batch-submit-button");
 const resultPanel = document.querySelector("#result-panel");
@@ -19,7 +18,7 @@ const resultPanel = document.querySelector("#result-panel");
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const maxImageBytes = 8 * 1024 * 1024;
 const maxBatchLabels = 10;
-const requestTimeoutMs = 16000;
+const requestTimeoutMs = 9000;
 const batchRequestTimeoutMs = 65000;
 const standardGovernmentWarning = "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink alcoholic beverages during pregnancy because of the risk of birth defects. (2) Consumption of alcoholic beverages impairs your ability to drive a car or operate machinery, and may cause health problems.";
 
@@ -74,17 +73,26 @@ function allFieldsFilled() {
 
 function formReady() {
   const file = selectedImage();
-  return Boolean(file && allowedTypes.has(file.type) && file.size > 0 && allFieldsFilled());
+  return Boolean(
+    file
+    && allowedTypes.has(file.type)
+    && file.size > 0
+    && file.size <= maxImageBytes
+    && allFieldsFilled(),
+  );
 }
 
 function updateFormState() {
   submitButton.disabled = !formReady();
-  if (!selectedImage() || !allFieldsFilled()) {
+  const file = selectedImage();
+  if (!file || !allFieldsFilled()) {
     setFormMessage("Choose an image and fill in all fields to check the label.");
-  } else if (!allowedTypes.has(selectedImage().type)) {
+  } else if (!allowedTypes.has(file.type)) {
     setFormMessage("Use a JPEG, PNG, or WebP image.", true);
-  } else if (selectedImage().size === 0) {
+  } else if (file.size === 0) {
     setFormMessage("That image file is empty. Choose another image.", true);
+  } else if (file.size > maxImageBytes) {
+    setFormMessage("Use an image smaller than 8 MB.", true);
   } else {
     setFormMessage("");
   }
@@ -105,6 +113,7 @@ function setLoading(isLoading) {
   for (const [, input] of fields) {
     input.disabled = isLoading;
   }
+  form.setAttribute("aria-busy", String(isLoading));
   imageInput.disabled = isLoading;
   submitButton.disabled = isLoading || !formReady();
   submitButton.textContent = isLoading ? "Reading label..." : "Check Label";
@@ -215,12 +224,16 @@ form.addEventListener("submit", async (event) => {
 
 batchImageInput.addEventListener("change", () => {
   const files = Array.from(batchImageInput.files || []);
-  batchRows = files.slice(0, maxBatchLabels).map((file, index) => ({
-    id: `label-${Date.now()}-${index}`,
-    file,
-    previewUrl: allowedTypes.has(file.type) && file.size > 0 ? URL.createObjectURL(file) : "",
-  }));
+  const availableSlots = Math.max(0, maxBatchLabels - batchRows.length);
+  const rowsToAdd = files.slice(0, availableSlots).map((file, index) => batchRowFromFile(file, index));
+  batchRows = batchRows.concat(rowsToAdd);
+  batchImageInput.value = "";
   renderBatchRows();
+  if (files.length > availableSlots) {
+    setBatchFormMessage(`Only ${maxBatchLabels} labels can be checked at a time.`, true);
+    batchSubmitButton.disabled = !batchReady();
+    return;
+  }
   updateBatchFormState();
 });
 
@@ -232,20 +245,6 @@ batchRowsContainer.addEventListener("click", (event) => {
   }
   batchRows = batchRows.filter((row) => row.id !== removeButton.dataset.removeRow);
   renderBatchRows();
-  updateBatchFormState();
-});
-
-batchCopyFirstButton.addEventListener("click", () => {
-  if (batchRows.length < 2) {
-    return;
-  }
-  const firstValues = batchRowData(batchRows[0].id);
-  for (const row of batchRows.slice(1)) {
-    for (const [name] of fieldDefinitions) {
-      const input = document.querySelector(`#batch-${row.id}-${name}`);
-      input.value = firstValues[name];
-    }
-  }
   updateBatchFormState();
 });
 
@@ -307,8 +306,8 @@ batchForm.addEventListener("submit", async (event) => {
 function renderBatchRows() {
   batchRowsSection.hidden = batchRows.length === 0;
   batchFileName.textContent = batchRows.length === 0
-    ? "JPEG, PNG, or WebP"
-    : `${batchRows.length} label image${batchRows.length === 1 ? "" : "s"} selected`;
+    ? "Choose one or more JPEG, PNG, or WebP images"
+    : `${batchRows.length} label image${batchRows.length === 1 ? "" : "s"} added`;
 
   batchRowsContainer.innerHTML = batchRows.map((row, index) => `
     <article class="batch-row" data-row-id="${escapeHtml(row.id)}">
@@ -325,6 +324,14 @@ function renderBatchRows() {
       </div>
     </article>
   `).join("");
+}
+
+function batchRowFromFile(file, index) {
+  return {
+    id: `label-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
+    file,
+    previewUrl: allowedTypes.has(file.type) && file.size > 0 ? URL.createObjectURL(file) : "",
+  };
 }
 
 function renderBatchInput(rowId, name, label, type) {
@@ -363,8 +370,12 @@ function allBatchRowsFilled() {
 function batchReady() {
   return batchRows.length > 0
     && batchRows.length <= maxBatchLabels
-    && batchRows.every((row) => allowedTypes.has(row.file.type) && row.file.size > 0 && row.file.size <= maxImageBytes)
+    && batchRows.every((row) => batchRowImagesValid(row))
     && allBatchRowsFilled();
+}
+
+function batchRowImagesValid(row) {
+  return allowedTypes.has(row.file.type) && row.file.size > 0 && row.file.size <= maxImageBytes;
 }
 
 function updateBatchFormState() {
@@ -420,8 +431,8 @@ function setBatchFormMessage(message, isError = false, isLoading = false) {
 }
 
 function setBatchLoading(isLoading, count) {
+  batchForm.setAttribute("aria-busy", String(isLoading));
   batchImageInput.disabled = isLoading;
-  batchCopyFirstButton.disabled = isLoading;
   batchRowsContainer.querySelectorAll("input, textarea, button").forEach((input) => {
     input.disabled = isLoading;
   });
@@ -437,7 +448,7 @@ function renderBatchProgress(count) {
   resultPanel.innerHTML = `
     <div class="progress-panel">
       <h2>Checking ${count} label${count === 1 ? "" : "s"}...</h2>
-      <div class="progress-bar" aria-hidden="true"><span></span></div>
+      <div class="progress-bar" role="progressbar" aria-label="Checking labels"><span></span></div>
     </div>
   `;
   focusResults();
