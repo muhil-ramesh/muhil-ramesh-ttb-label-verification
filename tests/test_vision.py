@@ -217,7 +217,7 @@ def test_gemini_service_uses_default_timeout_for_invalid_environment(
     service.extract_label(image_bytes())
 
     [call] = transport.calls
-    assert call["timeout_seconds"] == 7.5
+    assert call["timeout_seconds"] == 10.0
 
 
 def test_non_label_or_unreadable_image_returns_all_nulls_from_model() -> None:

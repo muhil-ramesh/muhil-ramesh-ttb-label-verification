@@ -42,7 +42,7 @@ Real secrets must live in local environment variables or Railway service variabl
 APP_ENV=local
 GEMINI_API_KEY=
 GEMINI_VISION_MODEL=gemini-3.1-flash-lite
-GEMINI_TIMEOUT_SECONDS=7.5
+GEMINI_TIMEOUT_SECONDS=10
 GEMINI_THINKING_LEVEL=minimal
 IMAGE_MAX_LONG_SIDE=1024
 IMAGE_JPEG_QUALITY=80
@@ -64,7 +64,7 @@ Run the app:
 ```bash
 export GEMINI_VISION_MODEL=gemini-3.1-flash-lite
 export GEMINI_THINKING_LEVEL=minimal
-export GEMINI_TIMEOUT_SECONDS=7.5
+export GEMINI_TIMEOUT_SECONDS=10
 export IMAGE_MAX_LONG_SIDE=1024
 export IMAGE_JPEG_QUALITY=80
 export BATCH_CONCURRENCY=3
@@ -149,7 +149,7 @@ Batch mode processes labels concurrently with a bounded concurrency limit. One b
 
 ## Performance Notes
 
-The original goal was a strict under-5-second single-label check. Live Gemini testing showed provider latency variance, so the proof-of-concept now uses a practical backend timeout of `7.5` seconds and a frontend timeout of `9` seconds. Fast successful checks can complete around 3 to 4 seconds, but provider latency and free-tier quota limits can vary.
+The original goal was a strict under-5-second single-label check. Live testing on the available free-tier Gemini access showed provider latency variance that made that target unrealistic for this prototype. In practice, successful checks often take around 7.5 seconds, so the proof-of-concept uses a practical backend timeout of `10` seconds and a frontend timeout of `12` seconds. Faster successful checks can still complete around 3 to 4 seconds, but provider latency and free-tier quota limits can vary.
 
 Batch mode can take longer because several labels are processed together. Concurrency is bounded with `BATCH_CONCURRENCY`.
 
